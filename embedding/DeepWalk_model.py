@@ -6,8 +6,13 @@ import pandas as pd
 import torch
 import torch.nn as nn
 import lightning as L
+import pytorch_lightning as pl
+from pytorch_lightning.loggers import TensorBoardLogger
 
 from torch.utils.data import Dataset, DataLoader
+
+base_dir = '/data/zhy/recommendation_system/musicRec'
+
 
 class DeepWalk(L.LightningModule):
     def __init__(self, user_num, item_num, dim=32, window_size=5, lr=0.01):
@@ -102,8 +107,8 @@ class DeepWalkDataset(Dataset):
         """
         super().__init__()
 
-        assert os.path.exists('../cache/graph.pkl'), '请先运行user_item_graph.py得到图文件'
-        self.graph = pickle.load(open('../cache/graph.pkl', 'rb'))
+        assert os.path.exists('%s/cache/graph.pkl' % base_dir), '请先运行user_item_graph.py得到图文件'
+        self.graph = pickle.load(open('%s/cache/graph.pkl' % base_dir, 'rb'))
 
         assert sequence_len >= window_size
 
@@ -114,10 +119,10 @@ class DeepWalkDataset(Dataset):
         self.neg_sample_num = neg_sample_num
 
         # 获取所有图节点
-        user_nodes: dict = pickle.load(open('../cache/user_id_dict.pkl', 'rb'))
-        self.user_nodes = list(user_nodes.keys())
-        song_nodes: dict = pickle.load(open('../cache/song_id_dict.pkl', 'rb'))
-        self.song_nodes = list(song_nodes.keys())
+        user_nodes: dict = pickle.load(open('%s/cache/user_id_dict.pkl' % base_dir, 'rb'))
+        self.user_nodes = list(user_nodes.values())
+        song_nodes: dict = pickle.load(open('%s/cache/song_id_dict.pkl' % base_dir, 'rb'))
+        self.song_nodes = list(song_nodes.values())
         self.all_nodes = [(0, i) for i in self.user_nodes] + [(1, i) for i in self.song_nodes]
         
 
@@ -132,7 +137,7 @@ class DeepWalkDataset(Dataset):
         self.all_sequence = []
         
         for i in range(self.num_walk):
-            self.all_nodes = random.shuffle(self.all_nodes)
+            random.shuffle(self.all_nodes)
             for node in self.all_nodes:
                 sequence = [(node[0], torch.tensor([node[1]]))]
                 while len(sequence) < self.sequence_len:
@@ -161,7 +166,7 @@ class DeepWalkDataset(Dataset):
 
     def __getitem__(self, index):
         pos = self.samples[index]
-        neg = random.choices(self.all_nodes, self.neg_sample_num)
+        neg = random.choices(self.all_nodes, k=self.neg_sample_num)
 
         return {'pos': pos, 'neg': neg}
     
@@ -170,9 +175,17 @@ class DeepWalkDataset(Dataset):
         return len(self.samples)
 
 if __name__ == '__main__':
-    model = DeepWalk()
+    user_num = len(pickle.load(
+        open('%s/cache/user_id_dict.pkl' % base_dir, 'rb')).keys())
+    song_num = len(pickle.load(
+        open('%s/cache/song_id_dict.pkl' % base_dir, 'rb')).keys())
+
+    model = DeepWalk(user_num, song_num, 16, 5, 0.01)
 
     dataset = DeepWalkDataset(window_size=5, sequence_len=10, num_walk=5, neg_sample_num=5)
-    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=4)
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=0)
 
-    trainer = L.Trainer(max_epochs=10, accelerator='gpu', devices=1, )
+    logger = TensorBoardLogger('deep_walk', name='DeepWalk')
+    trainer = L.Trainer(max_epochs=10, accelerator='gpu', devices=1, logger=logger)
+
+    trainer.fit(model, dataloader)
