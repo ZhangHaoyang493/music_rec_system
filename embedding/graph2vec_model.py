@@ -1,5 +1,7 @@
 import os
 import pickle
+import random
+import pandas as pd
 
 import torch
 import torch.nn as nn
@@ -7,7 +9,7 @@ import lightning as L
 
 from torch.utils.data import Dataset, DataLoader
 
-class Gaph2Vec(L.LightningModule):
+class DeepWalk(L.LightningModule):
     def __init__(self, user_num, item_num, dim=32, window_size=5, lr=0.01):
         """_summary_
 
@@ -88,13 +90,89 @@ class Gaph2Vec(L.LightningModule):
         return item_embedding_dict
     
 
-class Graph2vecDataset(Dataset):
-    def __init__(self):
+class DeepWalkDataset(Dataset):
+    def __init__(self, window_size=5, sequence_len=10, num_walk=5, neg_sample_num=5):
+        """_summary_
+
+        Args:
+            window_size (int, optional): word2vec的窗口大小. Defaults to 5.
+            sequence_len (int, optional): 每个序列的长度. Defaults to 10.
+            num_walk (int, optional): 对于每个节点，生成多少个序列. Defaults to 5.
+            neg_sample_num: 对于每个正样本，采样多少个负样本
+        """
         super().__init__()
 
         assert os.path.exists('../cache/graph.pkl'), '请先运行user_item_graph.py得到图文件'
         self.graph = pickle.load(open('../cache/graph.pkl', 'rb'))
 
+        assert sequence_len >= window_size
 
+        self.all_sequence = []
+        self.window_size = window_size
+        self.sequence_len = sequence_len
+        self.num_walk = num_walk
+        self.neg_sample_num = neg_sample_num
+
+        # 获取所有图节点
+        user_nodes: dict = pickle.load(open('../cache/user_id_dict.pkl', 'rb'))
+        self.user_nodes = list(user_nodes.keys())
+        song_nodes: dict = pickle.load(open('../cache/song_id_dict.pkl', 'rb'))
+        self.song_nodes = list(song_nodes.keys())
+        self.all_nodes = [(0, i) for i in self.user_nodes] + [(1, i) for i in self.song_nodes]
+        
+
+        # random walk生成序列
+        self._generate_sequence_by_random_walk()
+        self._generate_all_datas()
+
+    def _generate_sequence_by_random_walk(self):
+        """
+        生成随机游走序列
+        """
+        self.all_sequence = []
+        
+        for i in range(self.num_walk):
+            self.all_nodes = random.shuffle(self.all_nodes)
+            for node in self.all_nodes:
+                sequence = [(node[0], torch.tensor([node[1]]))]
+                while len(sequence) < self.sequence_len:
+                    neighboors = self.graph[node]
+                    if len(neighboors) == 0:
+                        break
+                    else:
+                        nei = random.choice(neighboors)
+                        sequence.append((nei[0], torch.tensor([nei[1]])))
+                self.all_sequence.append(sequence)
     
+    def _generate_all_datas(self):
+        """
+        根据所有的sequence生成和window_size一样长的所有数据，然后进行训练
+        """
+        self.samples = []
+
+        for seq in self.all_sequence:
+            if len(seq) < self.window_size:
+                assert len(seq) == 1
+                self.samples.append([seq[0] for i in range(self.window_size)])
+            else:
+                self.samples.extend([seq[i: i+self.window_size] 
+                                     for i in range(self.sequence_len - self.window_size)])
+        
+
+    def __getitem__(self, index):
+        pos = self.samples[index]
+        neg = random.choices(self.all_nodes, self.neg_sample_num)
+
+        return {'pos': pos, 'neg': neg}
     
+
+    def __len__(self):
+        return len(self.samples)
+
+if __name__ == '__main__':
+    model = DeepWalk()
+
+    dataset = DeepWalkDataset(window_size=5, sequence_len=10, num_walk=5, neg_sample_num=5)
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=True, num_workers=4)
+
+    trainer = L.Trainer(max_epochs=10, accelerator='gpu', devices=1, )
