@@ -1,12 +1,9 @@
 import torch
 import torch.nn as nn
 
+from torch.utils.data import Dataset
 
-
-import torch
-import torch.nn as nn
-
-
+import pandas as pd
 
 class DSSM(nn.Module):
     """
@@ -139,3 +136,21 @@ class DSSM(nn.Module):
         dot_product = torch.sum(user_feature, item_feature, dim=-1, keepdim=True)  # bxsample_num*1
         return dot_product
 
+
+
+class DSSMDataset(Dataset):
+    def __init__(self, train_path, song_path, user_path):
+        self.train_data = pd.read_csv(train_path)
+        self.user_song_dict = self.train_data[['msno', 'song_id']].to_dict()
+
+        self.user_data = pd.read_csv(user_path)
+        self.song_data = pd.read_csv(song_path)
+
+        # artist_name,composer,lyricist
+
+        self.user_id = self.user_data['msno'].unique().tolist()
+        self.song_id = self.song_data['song_id'].unique().tolist()
+        self.artist_name = self.song_data['artist_name'].unique().tolist()
+        self.composer = self.song_data['composer'].unique().tolist()
+        self.lyricist = self.song_data['lyricist'].unique().tolist()
+        
